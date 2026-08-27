@@ -1,0 +1,22 @@
+{
+  "name": "aether-empires",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Aether Empires — a modern 3D browser strategy game inspired by classic social empire builders.",
+  "workspaces": [
+    "shared",
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "preview": "npm run preview -w client",
+    "test": "npm run test -w client",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "server": "node server/src/index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data", "saves");
-
 const PID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 async function ensureDataDir() {
@@ -17,7 +16,7 @@ function savePath(pid) {
 }
 
 function sendJson(res, status, payload) {
-  const body = JSON.stringify(payload);
+  const body = status === 204 ? "" : JSON.stringify(payload);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
@@ -45,13 +44,20 @@ function readBody(req, limitBytes = 2 * 1024 * 1024) {
   });
 }
 
-async function handleGetSave(req, res, pid) {
+async function handleGetSave(res, pid) {
   try {
     const raw = await fs.readFile(savePath(pid), "utf8");
-    sendJson(res, 200, { ok: true, save: JSON.parse(raw) });
+    const save = JSON.parse(raw);
+    if (!save || typeof save !== "object") throw new Error("invalid save");
+    sendJson(res, 200, { ok: true, save });
   } catch (err) {
-    if (err && err.code === "ENOENT") sendJson(res, 404, { ok: false, error: "no save" });
-    else sendJson(res, 500, { ok: false, error: "read failed" });
+    // Missing or corrupt development saves are not server failures. The client
+    // can immediately start a clean kingdom from save:null.
+    if (err && (err.code === "ENOENT" || err instanceof SyntaxError)) {
+      sendJson(res, 200, { ok: true, save: null });
+    } else {
+      sendJson(res, 500, { ok: false, error: "read failed" });
+    }
   }
 }
 
@@ -59,7 +65,7 @@ async function handlePutSave(req, res, pid) {
   try {
     const body = await readBody(req);
     const parsed = JSON.parse(body);
-    if (!parsed || typeof parsed !== "object" || !parsed.version) {
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.buildings) || !Array.isArray(parsed.units)) {
       sendJson(res, 400, { ok: false, error: "malformed save" });
       return;
     }
@@ -67,8 +73,8 @@ async function handlePutSave(req, res, pid) {
     await fs.writeFile(tmp, JSON.stringify(parsed), "utf8");
     await fs.rename(tmp, savePath(pid));
     sendJson(res, 200, { ok: true, savedAt: Date.now() });
-  } catch {
-    sendJson(res, 400, { ok: false, error: "invalid payload" });
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "invalid payload" });
   }
 }
 
@@ -79,8 +85,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 204, {});
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/health") {
-      sendJson(res, 200, { ok: true, uptime: process.uptime() });
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/api/health")) {
+      sendJson(res, 200, { ok: true, service: "aether-empires-save", uptime: process.uptime() });
       return;
     }
     const saveMatch = /^\/api\/save\/([a-zA-Z0-9_-]+)$/.exec(url.pathname);
@@ -91,7 +97,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (req.method === "GET") {
-        await handleGetSave(req, res, pid);
+        await handleGetSave(res, pid);
         return;
       }
       if (req.method === "PUT") {
@@ -100,7 +106,8 @@ const server = http.createServer(async (req, res) => {
       }
     }
     sendJson(res, 404, { ok: false, error: "not found" });
-  } catch {
+  } catch (err) {
+    console.error("[aether-empires] request failed", err);
     sendJson(res, 500, { ok: false, error: "internal error" });
   }
 });
